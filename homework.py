@@ -1,41 +1,64 @@
 import logging
 import os
 import time
+import unittest
 
 import requests
 import telegram
 from dotenv import load_dotenv
+from requests import RequestException
+from telegram.error import TelegramError
 
 load_dotenv()
 
-logging.basicConfig(level=logging.DEBUG)
-
-
-PRAKTIKUM_TOKEN = os.getenv("PRAKTIKUM_TOKEN")
+PRAKTIKUM_TOKEN = os.getenv('PRAKTIKUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+PRAKTIKUM_API_URL = ('https://praktikum.yandex.ru/api/user_api/'
+                     'homework_statuses/')
+PRAKTIKUM_AUTHORIZATION_HEADER = {'Authorization': f'OAuth {PRAKTIKUM_TOKEN}'}
+STATUSES_AND_VERDICTS = {
+    'reviewing': 'Работу "{homework_name}" ещё не проверили.',
+    'rejected': ('У вас проверили работу "{homework_name}".\n'
+                 'К сожалению в работе нашлись ошибки.'),
+    'approved': ('У вас проверили работу "{homework_name}".\n'
+                 'Ревьюеру всё понравилось, '
+                 'можно приступать к следующему уроку.'),
+}
+LOG_FILE_NAME = 'bot.log'
+ERROR_CODES = ['error', 'code']
 
 
 def parse_homework_status(homework):
     homework_name = homework['homework_name']
     status = homework['status']
-    if status == 'reviewing':
-        return f'Работу "{homework_name}" ещё не проверили!'
-    if status == 'rejected':
-        verdict = 'К сожалению в работе нашлись ошибки.'
+    if status in STATUSES_AND_VERDICTS:
+        return STATUSES_AND_VERDICTS[status].format(
+            homework_name=homework_name)
     else:
-        verdict = ('Ревьюеру всё понравилось, '
-                   'можно приступать к следующему уроку.')
-    return f'У вас проверили работу "{homework_name}"!\n\n{verdict}'
+        raise ValueError(f'Неизвестное значение ключа "status": {status}!')
 
 
 def get_homework_statuses(current_timestamp):
-    homework_statuses = requests.get(
-        'https://praktikum.yandex.ru/api/user_api/homework_statuses/',
-        headers={'Authorization': f'OAuth {PRAKTIKUM_TOKEN}'},
-        params={'from_date': current_timestamp}
-    )
-    return homework_statuses.json()
+    params = {'from_date': current_timestamp}
+    try:
+        response = requests.get(
+            PRAKTIKUM_API_URL,
+            headers=PRAKTIKUM_AUTHORIZATION_HEADER,
+            params=params,
+        )
+    except RequestException as exception:
+        raise RequestException(
+            f'RequestException: {exception.args}.\n'
+            f'URL: {PRAKTIKUM_API_URL}, '
+            f'headers: {PRAKTIKUM_AUTHORIZATION_HEADER}, '
+            f'params: {params}.'
+        )
+    json = response.json()
+    for error_code in ERROR_CODES:
+        if error_code in json:
+            raise ValueError(f'Json return error value: {json[error_code]}')
+    return json
 
 
 def send_message(message, bot_client):
@@ -47,7 +70,7 @@ def send_message(message, bot_client):
 def main():
     logging.debug('Бот запущен!')
     bot = telegram.Bot(TELEGRAM_TOKEN)
-    current_timestamp = int(time.time())
+    current_timestamp = 0  # int(time.time())
     while True:
         try:
             new_homework = get_homework_statuses(current_timestamp)
@@ -59,10 +82,37 @@ def main():
             current_timestamp = new_homework.get('current_date',
                                                  current_timestamp)
             time.sleep(300)
-        except Exception as e:
-            send_message(f'Бот столкнулся с ошибкой: {e}', bot)
+        except Exception as exception:
+            error = f'Бот столкнулся с ошибкой!\n{exception}'
+            logging.error(error)
+            try:
+                send_message(error, bot)
+            except TelegramError as telegram_error:
+                raise TelegramError('Не удалось отправить сообщение: '
+                                    + telegram_error)
             time.sleep(5)
 
 
 if __name__ == '__main__':
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    handler = logging.FileHandler(LOG_FILE_NAME, 'a', 'utf-8')
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    ))
+    root_logger.addHandler(handler)
     main()
+    # from unittest import TestCase, mock
+    # ReqEx = requests.RequestException
+    # JSON = {'homew1orks': 'wat'}
+
+    # class TestReq(TestCase):
+    #     @mock.patch('requests.get')
+    #     def test_raised(self, rq_get):
+    #         response = mock.Mock()
+    #         response.json = mock.Mock(
+    #             return_value=JSON
+    #         )
+    #         rq_get.return_value = response
+    #         main()
+    # unittest.main()
