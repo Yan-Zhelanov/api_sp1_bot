@@ -1,7 +1,8 @@
+# import unittest
 import logging
 import os
 import time
-import unittest
+from logging.handlers import TimedRotatingFileHandler
 
 import requests
 import telegram
@@ -17,6 +18,8 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 PRAKTIKUM_API_URL = ('https://praktikum.yandex.ru/api/user_api/'
                      'homework_statuses/')
 PRAKTIKUM_AUTHORIZATION_HEADER = {'Authorization': f'OAuth {PRAKTIKUM_TOKEN}'}
+LOG_FILE_NAME = 'bot.log'
+ERROR_CODES = ['error', 'code']
 STATUSES_AND_VERDICTS = {
     'reviewing': 'Работу "{homework_name}" ещё не проверили.',
     'rejected': ('У вас проверили работу "{homework_name}".\n'
@@ -25,8 +28,19 @@ STATUSES_AND_VERDICTS = {
                  'Ревьюеру всё понравилось, '
                  'можно приступать к следующему уроку.'),
 }
-LOG_FILE_NAME = 'bot.log'
-ERROR_CODES = ['error', 'code']
+UNEXPECTED_VALUE_STATUS = 'Неизвестное значение ключа "status": {status}!'
+REQUEST_EXCEPTION = (
+    'RequestException: {exception}.\n'
+    'URL: {url}, '
+    'headers: {headers}, '
+    'params: {params}.'
+)
+JSON_EXCEPTION = 'Json вернул код ошибки: {error}'
+ERROR = 'Бот столкнулся с ошибкой!\n{exception}'
+SEND_EXCEPTION = 'Не удалось отправить сообщение: {error}'
+BOT_RUN = 'Бот запущен!'
+SEND_MESSAGE = ('Отправляю сообщение: "{message}", '
+                'пользователю: {chat_id}.')
 
 
 def parse_homework_status(homework):
@@ -36,7 +50,7 @@ def parse_homework_status(homework):
         return STATUSES_AND_VERDICTS[status].format(
             homework_name=homework_name)
     else:
-        raise ValueError(f'Неизвестное значение ключа "status": {status}!')
+        raise ValueError(UNEXPECTED_VALUE_STATUS.format(status=status))
 
 
 def get_homework_statuses(current_timestamp):
@@ -48,29 +62,28 @@ def get_homework_statuses(current_timestamp):
             params=params,
         )
     except RequestException as exception:
-        raise RequestException(
-            f'RequestException: {exception.args}.\n'
-            f'URL: {PRAKTIKUM_API_URL}, '
-            f'headers: {PRAKTIKUM_AUTHORIZATION_HEADER}, '
-            f'params: {params}.'
-        )
+        raise RequestException(REQUEST_EXCEPTION.format(
+            exception=exception,
+            url=PRAKTIKUM_API_URL,
+            headers=PRAKTIKUM_AUTHORIZATION_HEADER,
+            params=params,
+        ))
     json = response.json()
     for error_code in ERROR_CODES:
         if error_code in json:
-            raise ValueError(f'Json return error value: {json[error_code]}')
+            raise ValueError(JSON_EXCEPTION.format(error=json[error_code]))
     return json
 
 
 def send_message(message, bot_client):
-    logging.info(f'Отправляю сообщение: "{message}", '
-                 f'пользователю: {CHAT_ID}...')
+    logging.info(SEND_MESSAGE.format(message=message, chat_id=CHAT_ID))
     return bot_client.send_message(CHAT_ID, message)
 
 
 def main():
-    logging.debug('Бот запущен!')
+    logging.debug(BOT_RUN)
     bot = telegram.Bot(TELEGRAM_TOKEN)
-    current_timestamp = 0  # int(time.time())
+    current_timestamp = int(time.time())
     while True:
         try:
             new_homework = get_homework_statuses(current_timestamp)
@@ -81,22 +94,28 @@ def main():
                 )
             current_timestamp = new_homework.get('current_date',
                                                  current_timestamp)
-            time.sleep(300)
+            time.sleep(5)
         except Exception as exception:
-            error = f'Бот столкнулся с ошибкой!\n{exception}'
+            error = ERROR.format(exception=exception)
             logging.error(error)
             try:
                 send_message(error, bot)
             except TelegramError as telegram_error:
-                raise TelegramError('Не удалось отправить сообщение: '
-                                    + telegram_error)
+                raise TelegramError(SEND_EXCEPTION.format(
+                    error=telegram_error))
             time.sleep(5)
 
 
 if __name__ == '__main__':
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
-    handler = logging.FileHandler(LOG_FILE_NAME, 'a', 'utf-8')
+    handler = TimedRotatingFileHandler(
+        LOG_FILE_NAME,
+        when='midnight',
+        interval=1,
+        encoding='utf-8',
+    )
+    handler.suffix = '%Y%m%d'
     handler.setFormatter(logging.Formatter(
         '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
     ))
