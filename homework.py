@@ -27,7 +27,7 @@ VERDICTS = {
 }
 UNEXPECTED_VALUE_STATUS = 'Неизвестное значение ключа "status": {status}!'
 REQUEST_EXCEPTION = (
-    'Не удалось обработать запрос.\n'
+    'Не удалось получить ответ на GET запрос к API практикума.\n'
     'RequestException: {exception}.\n'
     'URL: {url}, '
     'headers: {headers}, '
@@ -47,11 +47,10 @@ SEND_MESSAGE = ('Отправляю сообщение: "{message}", '
 
 
 def parse_homework_status(homework):
-    homework_name = homework['homework_name']
     status = homework['status']
     if status not in VERDICTS:
         raise ValueError(UNEXPECTED_VALUE_STATUS.format(status=status))
-    return VERDICTS[status].format(homework_name=homework_name)
+    return VERDICTS[status].format(homework_name=homework['homework_name'])
 
 
 def get_homework_statuses(current_timestamp):
